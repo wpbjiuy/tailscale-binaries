@@ -1,0 +1,84 @@
+name: Build Tailscale Binaries
+
+# 允许手动触发运行
+on:
+  workflow_dispatch:
+    inputs:
+      tailscale_version:
+        description: 'Tailscale Version to build (e.g. v1.76.6)'
+        required: true
+        default: 'v1.76.6'
+
+jobs:
+  build:
+    name: Build for ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest # 全部在 Linux 环境下交叉编译即可，速度最快
+    
+    # 定义我们要编译的目标平台和架构矩阵
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      # 1. 检出 Tailscale 官方源码
+      - name: Checkout Tailscale Source
+        uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale
+          ref: ${{ github.event.inputs.tailscale_version }}
+
+      # 2. 安装 Go 语言环境 (你不需要懂Go，机器会自动装)
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23' # Tailscale 较新版本需要 Go 1.22+
+
+      # 3. 执行编译命令
+      - name: Build Binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0 # 禁用 CGO，确保生成纯静态二进制文件，跨平台兼容性最好
+        run: |
+          echo "Building for $GOOS/$GOARCH..."
+          
+          # 编译 CLI 和 Daemon
+          go build -ldflags="-s -w" -o tailscale ./cmd/tailscale
+          go build -ldflags="-s -w" -o tailscaled ./cmd/tailscaled
+          
+          # 如果是 Windows，重命名加上 .exe 后缀
+          if [ "$GOOS" == "windows" ]; then
+            mv tailscale tailscale.exe
+            mv tailscaled tailscaled.exe
+          fi
+          
+          # 赋予 Mac/Linux 执行权限 (虽然打包后解压通常会保留，但加上更保险)
+          chmod +x tailscale*
+
+      # 4. 将编译好的文件打包成 zip
+      - name: Package Artifacts
+        run: |
+          mkdir -p output/${{ matrix.goos }}/${{ matrix.goarch }}
+          mv tailscale* output/${{ matrix.goos }}/${{ matrix.goarch }}/
+          cd output
+          zip -r ../tailscale-${{ matrix.goos }}-${{ matrix.goarch }}.zip .
+
+      # 5. 上传打包好的 zip 文件
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: tailscale-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+          retention-days: 90 # 保留 90 天
